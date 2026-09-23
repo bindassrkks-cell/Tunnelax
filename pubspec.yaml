@@ -1,5 +1,5 @@
-name: engine_app
-description: "Engine App with Assets & Metadata Module"
+name: movie_stream_app
+description: "Movie Streaming OTT App with Binary Package Loader"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -9,9 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  sqflite: ^2.3.0
   path_provider: ^2.1.2
   path: ^1.9.0
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:
@@ -21,16 +21,8 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/metadata.json
-    - assets/splash/splash_logo.png
-    - assets/scripts/bootstrap.lua
-    - assets/scripts/patcher.lua
-    - assets/database/app_storage.db
-    - assets/textures/character_diffuse.astc
-    - assets/audio/bgm_theme.ogg
-    - assets/video/intro_cinematic.mp4
-
-  fonts:
-    - family: EngineFont
-      fonts:
-        - asset: assets/fonts/engine_font.ttf
+    - assets/metadata/metadata.json
+    - assets/scripts/supabase_connect.lua
+    - assets/binaries/catalog.dat
+    - assets/binaries/supabase_engine.dat
+    - assets/binaries/graphics_cache.dat

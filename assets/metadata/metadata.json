@@ -1,0 +1,33 @@
+{
+  "app_info": {
+    "app_name": "StreamRaaz OTT",
+    "package_name": "com.stream.movieapp",
+    "version": "1.0.0",
+    "build_code": 1
+  },
+  "supabase_module": {
+    "bucket_name": "Raaz",
+    "lua_driver": "assets/scripts/supabase_connect.lua",
+    "status": "Active"
+  },
+  "binary_packages": [
+    {
+      "file_name": "catalog.dat",
+      "asset_path": "assets/binaries/catalog.dat",
+      "description": "Encrypted movie streaming catalog & index",
+      "size_kb": 2
+    },
+    {
+      "file_name": "supabase_engine.dat",
+      "asset_path": "assets/binaries/supabase_engine.dat",
+      "description": "Supabase Bucket connector binary",
+      "size_kb": 1
+    },
+    {
+      "file_name": "graphics_cache.dat",
+      "asset_path": "assets/binaries/graphics_cache.dat",
+      "description": "Hardware texture cache module",
+      "size_kb": 51
+    }
+  ]
+}
