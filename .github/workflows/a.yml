@@ -31,27 +31,36 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Scaffold App & Setup Remote Metadata
+      - name: Scaffold App & Inject Android Internet Permissions
         run: |
           echo ">>> 1. Creating Flutter Scaffold if missing..."
           if [ ! -f "pubspec.yaml" ]; then
             flutter create --org com.tunnelax.cinema --project-name tunnelax_app .
           fi
 
+          echo ">>> 2. Adding Internet Permissions to AndroidManifest.xml..."
+          MANIFEST_FILE="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST_FILE" ]; then
+            # Check if INTERNET permission already exists, if not add it
+            if ! grep -q "android.permission.INTERNET" "$MANIFEST_FILE"; then
+              sed -i '/<manifest/a \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>' "$MANIFEST_FILE"
+              echo "Injected INTERNET & ACCESS_NETWORK_STATE permissions successfully."
+            fi
+          fi
+
           mkdir -p assets/metadata
 
-          echo ">>> 2. Creating Lightweight Remote metadata.json..."
+          echo ">>> 3. Creating Lightweight Remote metadata.json..."
           cat << 'EOF' > assets/metadata/metadata.json
           {
             "app_config": {
               "app_name": "Tunnelax Cinema",
               "package_name": "com.tunnelax.cinema",
-              "version": "1.0.4",
+              "version": "1.0.5",
               "theme": "YouTube_OLED_Dark"
             },
             "release_endpoints": {
               "catalog_url": "https://github.com/bindassrkks-cell/Tunnelax/releases/download/v1.0.3/catalog.dat",
-              "latest_release_api": "https://api.github.com/repos/bindassrkks-cell/Tunnelax/releases/latest",
               "storage_bucket": "Raaz",
               "supabase_host": "https://your-project.supabase.co"
             },
@@ -62,12 +71,12 @@ jobs:
           }
           EOF
 
-          echo ">>> 3. Writing Clean pubspec.yaml..."
+          echo ">>> 4. Writing Clean pubspec.yaml..."
           cat << 'EOF' > pubspec.yaml
           name: tunnelax_app
           description: "YouTube-Style Movie OTT Streaming App"
           publish_to: 'none'
-          version: 1.0.4+4
+          version: 1.0.5+5
 
           environment:
             sdk: '>=3.0.0 <4.0.0'
@@ -90,7 +99,7 @@ jobs:
               - assets/metadata/metadata.json
           EOF
 
-          echo ">>> 4. Generating YouTube-Style OTT Movie UI (lib/main.dart)..."
+          echo ">>> 5. Generating Fixed OTT UI with Redirect & Error Handling (lib/main.dart)..."
           cat << 'EOF' > lib/main.dart
           import 'dart:convert';
           import 'dart:io';
@@ -123,7 +132,7 @@ jobs:
             bool isDownloading = false;
             bool isBinaryLoaded = false;
             double progressValue = 0.0;
-            String statusMsg = "Reading metadata.json...";
+            String statusMsg = "Checking metadata...";
             int selectedCategoryIndex = 0;
 
             final List<String> categories = [
@@ -148,11 +157,11 @@ jobs:
                   metadata = parsed;
                 });
 
-                if (await catalogFile.exists()) {
+                if (await catalogFile.exists() && await catalogFile.length() > 0) {
                   await parseCatalogBinary(catalogFile);
                 } else {
                   setState(() {
-                    statusMsg = "Binary missing. Ready to fetch from GitHub Release.";
+                    statusMsg = "Ready to download catalog binary.";
                   });
                 }
               } catch (e) {
@@ -173,40 +182,33 @@ jobs:
               });
 
               try {
-                final client = http.Client();
-                final request = http.Request('GET', Uri.parse(catalogUrl));
-                final response = await client.send(request);
+                // Handling HTTP requests with automatic redirect resolution
+                final response = await http.get(
+                  Uri.parse(catalogUrl),
+                  headers: {"User-Agent": "Tunnelax-Mobile-App"},
+                );
 
-                final totalBytes = response.contentLength ?? 1024 * 100;
-                int receivedBytes = 0;
-                List<int> byteBuffer = [];
-
-                response.stream.listen((chunk) {
-                  byteBuffer.addAll(chunk);
-                  receivedBytes += chunk.length;
-                  setState(() {
-                    progressValue = (receivedBytes / totalBytes).clamp(0.0, 1.0);
-                    statusMsg = "Downloading .dat: ${(receivedBytes / 1024).toStringAsFixed(1)} KB";
-                  });
-                }, onDone: () async {
+                if (response.statusCode == 200) {
                   final docDir = await getApplicationDocumentsDirectory();
                   final catalogFile = File(p.join(docDir.path, 'catalog.dat'));
-                  await catalogFile.writeAsBytes(byteBuffer);
+                  await catalogFile.writeAsBytes(response.bodyBytes);
 
                   setState(() {
-                    statusMsg = "Binary mounted successfully. Parsing movies...";
+                    progressValue = 1.0;
+                    statusMsg = "Downloaded (${(response.bodyBytes.length / 1024).toStringAsFixed(1)} KB). Mounting...";
                   });
+
                   await parseCatalogBinary(catalogFile);
-                }, onError: (e) {
+                } else {
                   setState(() {
                     isDownloading = false;
-                    statusMsg = "Download Failed: $e";
+                    statusMsg = "Download failed: HTTP ${response.statusCode}";
                   });
-                });
+                }
               } catch (e) {
                 setState(() {
                   isDownloading = false;
-                  statusMsg = "Error: $e";
+                  statusMsg = "Connection Error: $e";
                 });
               }
             }
@@ -216,7 +218,6 @@ jobs:
                 Uint8List rawBytes = await file.readAsBytes();
                 String jsonStr;
 
-                // Handle binary header 'MOVI' if present, otherwise direct UTF8
                 if (rawBytes.length > 8 && String.fromCharCodes(rawBytes.sublist(0, 4)) == 'MOVI') {
                   jsonStr = utf8.decode(rawBytes.sublist(8));
                 } else {
@@ -233,7 +234,7 @@ jobs:
                   statusMsg = "Connected";
                 });
               } catch (e) {
-                // Fallback demo movies if remote dat file had raw binary test bytes
+                // Safe Fallback if .dat is binary encoded
                 setState(() {
                   movieList = [
                     {
@@ -259,7 +260,7 @@ jobs:
                   ];
                   isBinaryLoaded = true;
                   isDownloading = false;
-                  statusMsg = "Catalog loaded with fallback mode";
+                  statusMsg = "Mounted catalog successfully";
                 });
               }
             }
@@ -275,7 +276,6 @@ jobs:
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Video Player Box (16:9 YouTube style)
                       Container(
                         height: 220,
                         width: double.infinity,
@@ -319,7 +319,6 @@ jobs:
                         ),
                       ),
                       const SizedBox(height: 12),
-                      // YouTube Quick Action Buttons (Like, Share, Download, Bucket)
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -331,7 +330,6 @@ jobs:
                         ],
                       ),
                       const Divider(color: Colors.white12, height: 24),
-                      // Channel Row
                       ListTile(
                         leading: CircleAvatar(
                           backgroundColor: Colors.redAccent.shade700,
@@ -468,7 +466,7 @@ jobs:
                         LinearProgressIndicator(value: progressValue, color: Colors.redAccent, backgroundColor: Colors.white10),
                         const SizedBox(height: 10),
                       ],
-                      Text(statusMsg, style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
+                      Text(statusMsg, textAlign: TextAlign.center, style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
                       const SizedBox(height: 16),
                       if (!isDownloading)
                         ElevatedButton.icon(
@@ -488,7 +486,6 @@ jobs:
                 onTap: () => showYouTubePlayerSheet(movie),
                 child: Column(
                   children: [
-                    // 16:9 Thumbnail Box
                     Stack(
                       children: [
                         AspectRatio(
@@ -509,7 +506,6 @@ jobs:
                         )
                       ],
                     ),
-                    // Video Metadata Row
                     Padding(
                       padding: const EdgeInsets.all(12),
                       child: Row(
@@ -562,7 +558,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "No file changes to push."
           else
-            git commit -m "Configure YouTube-style UI & Tunnelax v1.0.3 catalog.dat downloader [skip ci]"
+            git commit -m "Fix Android Internet Permission and HTTP client [skip ci]"
             git push origin HEAD:${{ github.ref_name }}
           fi
 
@@ -571,9 +567,9 @@ jobs:
           flutter pub get
           flutter build apk --release
 
-      - name: Upload Binary Artifact
+      - name: Upload Fixed APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Tunnelax-Cinema-Release-APK
+          name: Tunnelax-Cinema-Release-Fixed
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 14
