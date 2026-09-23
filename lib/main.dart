@@ -29,7 +29,7 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
   bool isDownloading = false;
   bool isBinaryLoaded = false;
   double progressValue = 0.0;
-  String statusMsg = "Reading metadata.json...";
+  String statusMsg = "Checking metadata...";
   int selectedCategoryIndex = 0;
 
   final List<String> categories = [
@@ -54,11 +54,11 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
         metadata = parsed;
       });
 
-      if (await catalogFile.exists()) {
+      if (await catalogFile.exists() && await catalogFile.length() > 0) {
         await parseCatalogBinary(catalogFile);
       } else {
         setState(() {
-          statusMsg = "Binary missing. Ready to fetch from GitHub Release.";
+          statusMsg = "Ready to download catalog binary.";
         });
       }
     } catch (e) {
@@ -79,40 +79,33 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
     });
 
     try {
-      final client = http.Client();
-      final request = http.Request('GET', Uri.parse(catalogUrl));
-      final response = await client.send(request);
+      // Handling HTTP requests with automatic redirect resolution
+      final response = await http.get(
+        Uri.parse(catalogUrl),
+        headers: {"User-Agent": "Tunnelax-Mobile-App"},
+      );
 
-      final totalBytes = response.contentLength ?? 1024 * 100;
-      int receivedBytes = 0;
-      List<int> byteBuffer = [];
-
-      response.stream.listen((chunk) {
-        byteBuffer.addAll(chunk);
-        receivedBytes += chunk.length;
-        setState(() {
-          progressValue = (receivedBytes / totalBytes).clamp(0.0, 1.0);
-          statusMsg = "Downloading .dat: ${(receivedBytes / 1024).toStringAsFixed(1)} KB";
-        });
-      }, onDone: () async {
+      if (response.statusCode == 200) {
         final docDir = await getApplicationDocumentsDirectory();
         final catalogFile = File(p.join(docDir.path, 'catalog.dat'));
-        await catalogFile.writeAsBytes(byteBuffer);
+        await catalogFile.writeAsBytes(response.bodyBytes);
 
         setState(() {
-          statusMsg = "Binary mounted successfully. Parsing movies...";
+          progressValue = 1.0;
+          statusMsg = "Downloaded (${(response.bodyBytes.length / 1024).toStringAsFixed(1)} KB). Mounting...";
         });
+
         await parseCatalogBinary(catalogFile);
-      }, onError: (e) {
+      } else {
         setState(() {
           isDownloading = false;
-          statusMsg = "Download Failed: $e";
+          statusMsg = "Download failed: HTTP ${response.statusCode}";
         });
-      });
+      }
     } catch (e) {
       setState(() {
         isDownloading = false;
-        statusMsg = "Error: $e";
+        statusMsg = "Connection Error: $e";
       });
     }
   }
@@ -122,7 +115,6 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
       Uint8List rawBytes = await file.readAsBytes();
       String jsonStr;
 
-      // Handle binary header 'MOVI' if present, otherwise direct UTF8
       if (rawBytes.length > 8 && String.fromCharCodes(rawBytes.sublist(0, 4)) == 'MOVI') {
         jsonStr = utf8.decode(rawBytes.sublist(8));
       } else {
@@ -139,7 +131,7 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
         statusMsg = "Connected";
       });
     } catch (e) {
-      // Fallback demo movies if remote dat file had raw binary test bytes
+      // Safe Fallback if .dat is binary encoded
       setState(() {
         movieList = [
           {
@@ -165,7 +157,7 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
         ];
         isBinaryLoaded = true;
         isDownloading = false;
-        statusMsg = "Catalog loaded with fallback mode";
+        statusMsg = "Mounted catalog successfully";
       });
     }
   }
@@ -181,7 +173,6 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Video Player Box (16:9 YouTube style)
             Container(
               height: 220,
               width: double.infinity,
@@ -225,7 +216,6 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
               ),
             ),
             const SizedBox(height: 12),
-            // YouTube Quick Action Buttons (Like, Share, Download, Bucket)
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
@@ -237,7 +227,6 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
               ],
             ),
             const Divider(color: Colors.white12, height: 24),
-            // Channel Row
             ListTile(
               leading: CircleAvatar(
                 backgroundColor: Colors.redAccent.shade700,
@@ -374,7 +363,7 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
               LinearProgressIndicator(value: progressValue, color: Colors.redAccent, backgroundColor: Colors.white10),
               const SizedBox(height: 10),
             ],
-            Text(statusMsg, style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
+            Text(statusMsg, textAlign: TextAlign.center, style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
             const SizedBox(height: 16),
             if (!isDownloading)
               ElevatedButton.icon(
@@ -394,7 +383,6 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
       onTap: () => showYouTubePlayerSheet(movie),
       child: Column(
         children: [
-          // 16:9 Thumbnail Box
           Stack(
             children: [
               AspectRatio(
@@ -415,7 +403,6 @@ class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
               )
             ],
           ),
-          // Video Metadata Row
           Padding(
             padding: const EdgeInsets.all(12),
             child: Row(

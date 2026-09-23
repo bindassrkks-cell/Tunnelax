@@ -2,12 +2,11 @@
   "app_config": {
     "app_name": "Tunnelax Cinema",
     "package_name": "com.tunnelax.cinema",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "theme": "YouTube_OLED_Dark"
   },
   "release_endpoints": {
     "catalog_url": "https://github.com/bindassrkks-cell/Tunnelax/releases/download/v1.0.3/catalog.dat",
-    "latest_release_api": "https://api.github.com/repos/bindassrkks-cell/Tunnelax/releases/latest",
     "storage_bucket": "Raaz",
     "supabase_host": "https://your-project.supabase.co"
   },
