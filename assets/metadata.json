@@ -1,0 +1,44 @@
+{
+  "app_metadata": {
+    "app_name": "CoreEngine App",
+    "package_id": "com.engine.app",
+    "version_name": "1.0.0",
+    "version_code": 1,
+    "build_type": "Release",
+    "target_api": "Vulkan_1.3"
+  },
+  "splash_screen": {
+    "enabled": true,
+    "asset_path": "assets/splash/splash_logo.png",
+    "duration_ms": 2000,
+    "background_color": "#0B0E14"
+  },
+  "graphics_module": {
+    "renderer": "Vulkan",
+    "profile": "Ultra_Performance",
+    "target_fps": 90,
+    "resolution_scale": 0.85,
+    "texture_compression": "ASTC_8x8",
+    "anti_aliasing": "MSAA_4X",
+    "shadow_enabled": true
+  },
+  "database_module": {
+    "enabled": true,
+    "db_name": "app_storage.db",
+    "asset_path": "assets/database/app_storage.db"
+  },
+  "scripting_module": {
+    "engine": "LuaCore",
+    "entry_point": "assets/scripts/bootstrap.lua",
+    "execution_order": [
+      "assets/scripts/bootstrap.lua",
+      "assets/scripts/patcher.lua"
+    ]
+  },
+  "assets_registry": {
+    "textures": ["assets/textures/character_diffuse.astc"],
+    "audio": ["assets/audio/bgm_theme.ogg"],
+    "video": ["assets/video/intro_cinematic.mp4"],
+    "fonts": ["assets/fonts/engine_font.ttf"]
+  }
+}
