@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
@@ -10,309 +11,448 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const MaterialApp(
     debugShowCheckedModeBanner: false,
-    title: "StreamRaaz OTT",
-    home: MovieAppScreen(),
+    title: "Tunnelax Cinema",
+    home: YouTubeStyleHome(),
   ));
 }
 
-class MovieAppScreen extends StatefulWidget {
-  const MovieAppScreen({super.key});
+class YouTubeStyleHome extends StatefulWidget {
+  const YouTubeStyleHome({super.key});
 
   @override
-  State<MovieAppScreen> createState() => _MovieAppScreenState();
+  State<YouTubeStyleHome> createState() => _YouTubeStyleHomeState();
 }
 
-class _MovieAppScreenState extends State<MovieAppScreen> {
-  bool isLoading = true;
-  bool binariesInstalled = false;
-  double downloadProgress = 0.0;
-  String statusText = "Checking metadata...";
+class _YouTubeStyleHomeState extends State<YouTubeStyleHome> {
   Map<String, dynamic>? metadata;
-  List<Map<String, dynamic>> moviesList = [];
+  List<Map<String, dynamic>> movieList = [];
+  bool isDownloading = false;
+  bool isBinaryLoaded = false;
+  double progressValue = 0.0;
+  String statusMsg = "Reading metadata.json...";
+  int selectedCategoryIndex = 0;
+
+  final List<String> categories = [
+    "All", "Blockbusters", "Sci-Fi", "Action", "Raaz Originals", "Trending", "Recently Added"
+  ];
 
   @override
   void initState() {
     super.initState();
-    initMetadataAndBinaries();
+    initMetadataAndCheckStorage();
   }
 
-  Future<void> initMetadataAndBinaries() async {
+  Future<void> initMetadataAndCheckStorage() async {
     try {
-      // 1. Read metadata.json
-      final metaStr = await rootBundle.loadString('assets/metadata/metadata.json');
-      final metaJson = jsonDecode(metaStr);
-      setState(() {
-        metadata = metaJson;
-        statusText = "Checking binary packages (.dat)...";
-      });
+      final rawMeta = await rootBundle.loadString('assets/metadata/metadata.json');
+      final parsed = jsonDecode(rawMeta);
 
-      // 2. Check local binary storage
       final docDir = await getApplicationDocumentsDirectory();
       final catalogFile = File(p.join(docDir.path, 'catalog.dat'));
 
-      if (!await catalogFile.exists()) {
-        setState(() {
-          isLoading = false;
-          binariesInstalled = false;
-        });
+      setState(() {
+        metadata = parsed;
+      });
+
+      if (await catalogFile.exists()) {
+        await parseCatalogBinary(catalogFile);
       } else {
-        await loadCatalogBinary(catalogFile);
+        setState(() {
+          statusMsg = "Binary missing. Ready to fetch from GitHub Release.";
+        });
       }
     } catch (e) {
       setState(() {
-        statusText = "Error: $e";
-        isLoading = false;
+        statusMsg = "Init Error: $e";
       });
     }
   }
 
-  Future<void> downloadAndInstallBinaries() async {
+  Future<void> downloadCatalogFromRelease() async {
+    final catalogUrl = metadata?['release_endpoints']['catalog_url'] ??
+        "https://github.com/bindassrkks-cell/Tunnelax/releases/download/v1.0.3/catalog.dat";
+
     setState(() {
-      isLoading = true;
-      statusText = "Extracting and mounting .dat binaries...";
-      downloadProgress = 0.1;
+      isDownloading = true;
+      progressValue = 0.05;
+      statusMsg = "Connecting to GitHub Releases...";
     });
 
-    final docDir = await getApplicationDocumentsDirectory();
-    List packages = metadata?['binary_packages'] ?? [];
+    try {
+      final client = http.Client();
+      final request = http.Request('GET', Uri.parse(catalogUrl));
+      final response = await client.send(request);
 
-    for (int i = 0; i < packages.length; i++) {
-      final pkg = packages[i];
-      final assetPath = pkg['asset_path'];
-      final fileName = pkg['file_name'];
+      final totalBytes = response.contentLength ?? 1024 * 100;
+      int receivedBytes = 0;
+      List<int> byteBuffer = [];
 
-      final byteData = await rootBundle.load(assetPath);
-      final destFile = File(p.join(docDir.path, fileName));
-      await destFile.writeAsBytes(byteData.buffer.asUint8List());
+      response.stream.listen((chunk) {
+        byteBuffer.addAll(chunk);
+        receivedBytes += chunk.length;
+        setState(() {
+          progressValue = (receivedBytes / totalBytes).clamp(0.0, 1.0);
+          statusMsg = "Downloading .dat: ${(receivedBytes / 1024).toStringAsFixed(1)} KB";
+        });
+      }, onDone: () async {
+        final docDir = await getApplicationDocumentsDirectory();
+        final catalogFile = File(p.join(docDir.path, 'catalog.dat'));
+        await catalogFile.writeAsBytes(byteBuffer);
+
+        setState(() {
+          statusMsg = "Binary mounted successfully. Parsing movies...";
+        });
+        await parseCatalogBinary(catalogFile);
+      }, onError: (e) {
+        setState(() {
+          isDownloading = false;
+          statusMsg = "Download Failed: $e";
+        });
+      });
+    } catch (e) {
+      setState(() {
+        isDownloading = false;
+        statusMsg = "Error: $e";
+      });
+    }
+  }
+
+  Future<void> parseCatalogBinary(File file) async {
+    try {
+      Uint8List rawBytes = await file.readAsBytes();
+      String jsonStr;
+
+      // Handle binary header 'MOVI' if present, otherwise direct UTF8
+      if (rawBytes.length > 8 && String.fromCharCodes(rawBytes.sublist(0, 4)) == 'MOVI') {
+        jsonStr = utf8.decode(rawBytes.sublist(8));
+      } else {
+        jsonStr = utf8.decode(rawBytes);
+      }
+
+      final decoded = jsonDecode(jsonStr);
+      List rawMovies = decoded['movies'] ?? [];
 
       setState(() {
-        downloadProgress = (i + 1) / packages.length;
-        statusText = "Unpacking: $fileName (${(downloadProgress * 100).toInt()}%)";
+        movieList = List<Map<String, dynamic>>.from(rawMovies);
+        isBinaryLoaded = true;
+        isDownloading = false;
+        statusMsg = "Connected";
       });
-      await Future.delayed(const Duration(milliseconds: 300));
+    } catch (e) {
+      // Fallback demo movies if remote dat file had raw binary test bytes
+      setState(() {
+        movieList = [
+          {
+            "id": "m1",
+            "title": "Raaz 2026: The Cyber Threat (Official Trailer)",
+            "channel": "Tunnelax Studios",
+            "views": "1.4M views",
+            "time": "3 days ago",
+            "duration": "2:14:10",
+            "thumb": "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800",
+            "stream_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+          },
+          {
+            "id": "m2",
+            "title": "Vulkan GFX Engine: 90FPS Ultra Graphics Showcase",
+            "channel": "Raaz Engine Lab",
+            "views": "890K views",
+            "time": "1 week ago",
+            "duration": "1:48:32",
+            "thumb": "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=800",
+            "stream_url": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"
+          }
+        ];
+        isBinaryLoaded = true;
+        isDownloading = false;
+        statusMsg = "Catalog loaded with fallback mode";
+      });
     }
-
-    final catalogFile = File(p.join(docDir.path, 'catalog.dat'));
-    await loadCatalogBinary(catalogFile);
   }
 
-  Future<void> loadCatalogBinary(File file) async {
-    Uint8List bytes = await file.readAsBytes();
-    // Parse header '!4sI' (8 bytes) -> Magic bytes 'MOVI' + length
-    Uint8List payload = bytes.sublist(8);
-    String jsonStr = utf8.decode(payload);
-    final catalog = jsonDecode(jsonStr);
-
-    setState(() {
-      moviesList = List<Map<String, dynamic>>.from(catalog['movies']);
-      binariesInstalled = true;
-      isLoading = false;
-    });
-  }
-
-  void playMovie(Map<String, dynamic> movie) {
+  void showYouTubePlayerSheet(Map<String, dynamic> movie) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF141724),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0F0F0F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => FractionallySizedBox(
+        heightFactor: 0.9,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
-            const SizedBox(height: 16),
-            Text("Now Streaming: ${movie['title']}", style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text("Connecting to Supabase Bucket 'Raaz'...", style: TextStyle(color: Colors.tealAccent.shade400, fontSize: 13)),
-            const SizedBox(height: 20),
-            LinearProgressIndicator(color: Colors.redAccent, backgroundColor: Colors.white10),
-            const SizedBox(height: 20),
-            Text("Stream Source: ${movie['stream_url']}", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () => Navigator.pop(ctx),
-              icon: const Icon(Icons.close),
-              label: const Text("Close Player"),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            )
+            // Video Player Box (16:9 YouTube style)
+            Container(
+              height: 220,
+              width: double.infinity,
+              color: Colors.black,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Image.network(movie['thumb'], fit: BoxFit.cover, width: double.infinity, height: double.infinity),
+                  Container(color: Colors.black45),
+                  const CircleAvatar(
+                    radius: 30,
+                    backgroundColor: Colors.redAccent,
+                    child: Icon(Icons.play_arrow, color: Colors.white, size: 36),
+                  ),
+                  Positioned(
+                    bottom: 10,
+                    left: 12,
+                    right: 12,
+                    child: Row(
+                      children: [
+                        const Text("00:15 / ", style: TextStyle(color: Colors.white, fontSize: 11)),
+                        Text(movie['duration'] ?? "02:00:00", style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                        const Spacer(),
+                        const Icon(Icons.fullscreen, color: Colors.white, size: 20)
+                      ],
+                    ),
+                  )
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Text(movie['title'], style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              child: Text(
+                "${movie['views'] ?? '1.2M views'} • ${movie['time'] ?? 'Just now'} • Bucket: ${metadata?['release_endpoints']['storage_bucket']}",
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // YouTube Quick Action Buttons (Like, Share, Download, Bucket)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildActionButton(Icons.thumb_up_outlined, "Like"),
+                _buildActionButton(Icons.thumb_down_outlined, "Dislike"),
+                _buildActionButton(Icons.share, "Share"),
+                _buildActionButton(Icons.download_for_offline_outlined, "Download .dat"),
+                _buildActionButton(Icons.folder_special, "Raaz Bucket"),
+              ],
+            ),
+            const Divider(color: Colors.white12, height: 24),
+            // Channel Row
+            ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.redAccent.shade700,
+                child: const Icon(Icons.movie_filter, color: Colors.white),
+              ),
+              title: Text(movie['channel'] ?? "Tunnelax Cinema", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              subtitle: const Text("1.82M subscribers", style: TextStyle(color: Colors.white54, fontSize: 12)),
+              trailing: ElevatedButton(
+                onPressed: () {},
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  shape: const StadiumBorder(),
+                ),
+                child: const Text("Subscribe", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+            ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildActionButton(IconData icon, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: const Color(0xFF272727), borderRadius: BorderRadius.circular(20)),
+          child: Icon(icon, color: Colors.white, size: 20),
+        ),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF090A10),
+      backgroundColor: const Color(0xFF0F0F0F),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF111422),
+        backgroundColor: const Color(0xFF0F0F0F),
         elevation: 0,
         title: Row(
           children: [
-            const Icon(Icons.play_circle_fill, color: Colors.redAccent, size: 28),
-            const SizedBox(width: 8),
-            Text(metadata?['app_info']['app_name'] ?? "StreamRaaz OTT", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: Colors.white)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(color: const Color(0xFFFF0000), borderRadius: BorderRadius.circular(4)),
+              child: const Icon(Icons.play_arrow, color: Colors.white, size: 18),
+            ),
+            const SizedBox(width: 6),
+            const Text(
+              "Tunnelax",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: -0.5, fontSize: 18),
+            ),
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_suggest, color: Colors.tealAccent),
-            onPressed: () => _showBinaryInfoDialog(),
+          IconButton(icon: const Icon(Icons.cast, color: Colors.white), onPressed: () {}),
+          IconButton(icon: const Icon(Icons.notifications_none, color: Colors.white), onPressed: () {}),
+          IconButton(icon: const Icon(Icons.search, color: Colors.white), onPressed: () {}),
+          const Padding(
+            padding: EdgeInsets.only(right: 12),
+            child: CircleAvatar(radius: 14, backgroundColor: Colors.deepPurpleAccent, child: Text("R", style: TextStyle(fontSize: 12, color: Colors.white))),
           )
         ],
-      ),
-      body: isLoading
-          ? _buildLoader()
-          : !binariesInstalled
-              ? _buildDownloadPrompt()
-              : _buildMovieDashboard(),
-    );
-  }
-
-  Widget _buildLoader() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 40),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const CircularProgressIndicator(color: Colors.redAccent),
-            const SizedBox(height: 20),
-            Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 14)),
-            if (downloadProgress > 0) ...[
-              const SizedBox(height: 12),
-              LinearProgressIndicator(value: downloadProgress, color: Colors.redAccent, backgroundColor: Colors.white12),
-            ]
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: SizedBox(
+            height: 48,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              itemCount: categories.length,
+              itemBuilder: (ctx, i) => Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: Text(categories[i], style: TextStyle(fontSize: 12, color: selectedCategoryIndex == i ? Colors.black : Colors.white)),
+                  selected: selectedCategoryIndex == i,
+                  selectedColor: Colors.white,
+                  backgroundColor: const Color(0xFF272727),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  onSelected: (val) => setState(() => selectedCategoryIndex = i),
+                ),
+              ),
+            ),
+          ),
         ),
       ),
+      body: !isBinaryLoaded
+          ? _buildBinaryDownloadPrompt()
+          : ListView.builder(
+              itemCount: movieList.length,
+              itemBuilder: (ctx, index) => _buildYouTubeVideoCard(movieList[index]),
+            ),
+      bottomNavigationBar: BottomNavigationBar(
+        backgroundColor: const Color(0xFF0F0F0F),
+        selectedItemColor: Colors.white,
+        unselectedItemColor: Colors.white54,
+        type: BottomNavigationBarType.fixed,
+        currentIndex: 0,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: "Home"),
+          BottomNavigationBarItem(icon: Icon(Icons.movie_creation_outlined), label: "Trailers"),
+          BottomNavigationBarItem(icon: Icon(Icons.subscriptions_outlined), label: "Subscribed"),
+          BottomNavigationBarItem(icon: Icon(Icons.video_library_outlined), label: "Library"),
+        ],
+      ),
     );
   }
 
-  Widget _buildDownloadPrompt() {
+  Widget _buildBinaryDownloadPrompt() {
     return Center(
       child: Container(
-        margin: const EdgeInsets.all(24),
+        margin: const EdgeInsets.all(20),
         padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: const Color(0xFF131726),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white10),
-        ),
+        decoration: BoxDecoration(color: const Color(0xFF1F1F1F), borderRadius: BorderRadius.circular(16)),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.cloud_download_rounded, size: 64, color: Colors.redAccent),
-            const SizedBox(height: 16),
-            const Text("Download Binary Assets", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            const Text(
-              "App ko run karne ke liye metadata dwara required .dat binary files (catalog, Supabase module & graphics cache) download karna zaroori hai.",
+            const Icon(Icons.cloud_sync_outlined, size: 54, color: Colors.redAccent),
+            const SizedBox(height: 12),
+            const Text("Connect & Mount catalog.dat", style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(
+              "Release URL: ${metadata?['release_endpoints']['catalog_url']}",
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white60, fontSize: 13),
+              style: const TextStyle(color: Colors.white54, fontSize: 11),
             ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: downloadAndInstallBinaries,
-              icon: const Icon(Icons.download),
-              label: const Text("Download & Mount .DAT Files"),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12)),
-            )
+            const SizedBox(height: 16),
+            if (isDownloading) ...[
+              LinearProgressIndicator(value: progressValue, color: Colors.redAccent, backgroundColor: Colors.white10),
+              const SizedBox(height: 10),
+            ],
+            Text(statusMsg, style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
+            const SizedBox(height: 16),
+            if (!isDownloading)
+              ElevatedButton.icon(
+                onPressed: downloadCatalogFromRelease,
+                icon: const Icon(Icons.download, size: 18),
+                label: const Text("Download Catalog Binary"),
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFF0000), shape: const StadiumBorder()),
+              )
           ],
         ),
       ),
     );
   }
 
-  Widget _buildMovieDashboard() {
-    return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      children: [
-        // Featured Banner
-        Container(
-          height: 200,
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            image: const DecorationImage(
-              image: NetworkImage("https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=800"),
-              fit: BoxFit.cover,
-            ),
+  Widget _buildYouTubeVideoCard(Map<String, dynamic> movie) {
+    return InkWell(
+      onTap: () => showYouTubePlayerSheet(movie),
+      child: Column(
+        children: [
+          // 16:9 Thumbnail Box
+          Stack(
+            children: [
+              AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Image.network(
+                  movie['thumb'] ?? "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=800",
+                  fit: BoxFit.cover,
+                ),
+              ),
+              Positioned(
+                bottom: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(4)),
+                  child: Text(movie['duration'] ?? "02:15:00", style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
+              )
+            ],
           ),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Colors.black.withOpacity(0.9), Colors.transparent]),
-            ),
-            padding: const EdgeInsets.all(16),
-            alignment: Alignment.bottomLeft,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+          // Video Metadata Row
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("TRENDING NOW", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                const Text("Cyber City 2077: Raaz Protocol", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                ElevatedButton.icon(
-                  onPressed: () => playMovie(moviesList.first),
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text("Watch Now"),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: Colors.red.shade900,
+                  child: const Icon(Icons.play_circle_outline, color: Colors.white, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        movie['title'] ?? "Unknown Title",
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600, height: 1.2),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "${movie['channel'] ?? 'Tunnelax'} • ${movie['views'] ?? '500K views'} • ${movie['time'] ?? '1 day ago'}",
+                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.more_vert, color: Colors.white70, size: 18),
+                  onPressed: () {},
                 )
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 24),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text("Movies From .DAT Engine Catalog", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-        ),
-        const SizedBox(height: 12),
-        // Movie Grid/List
-        ...moviesList.map((movie) => Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              decoration: BoxDecoration(color: const Color(0xFF131726), borderRadius: BorderRadius.circular(12)),
-              child: ListTile(
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.network(movie['thumb'], width: 55, height: 75, fit: BoxFit.cover),
-                ),
-                title: Text(movie['title'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text("${movie['genre']} • Rating: ${movie['rating']}", style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                trailing: ElevatedButton(
-                  onPressed: () => playMovie(movie),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent.shade700, shape: const CircleBorder(), padding: const EdgeInsets.all(10)),
-                  child: const Icon(Icons.play_arrow, color: Colors.white),
-                ),
-              ),
-            ))
-      ],
-    );
-  }
-
-  void _showBinaryInfoDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF151928),
-        title: const Text("Mounted Metadata Modules", style: TextStyle(color: Colors.tealAccent, fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("Storage Bucket: ${metadata?['supabase_module']['bucket_name']}", style: const TextStyle(color: Colors.white70)),
-            Text("Lua Driver: ${metadata?['supabase_module']['lua_driver']}", style: const TextStyle(color: Colors.white70)),
-            const Divider(color: Colors.white24),
-            const Text("Loaded .DAT Binaries:", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            ...?metadata?['binary_packages']?.map((pkg) => Text("• ${pkg['file_name']} (${pkg['size_kb']} KB)", style: const TextStyle(color: Colors.white54, fontSize: 12))),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("OK", style: TextStyle(color: Colors.redAccent)))
+          const SizedBox(height: 8),
         ],
       ),
     );

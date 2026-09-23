@@ -1,7 +1,7 @@
-name: movie_stream_app
-description: "Movie Streaming OTT App with Binary Package Loader"
+name: tunnelax_app
+description: "YouTube-Style Movie OTT Streaming App"
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.4+4
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -9,9 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  http: ^1.2.0
   path_provider: ^2.1.2
   path: ^1.9.0
-  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:
@@ -22,7 +22,3 @@ flutter:
   uses-material-design: true
   assets:
     - assets/metadata/metadata.json
-    - assets/scripts/supabase_connect.lua
-    - assets/binaries/catalog.dat
-    - assets/binaries/supabase_engine.dat
-    - assets/binaries/graphics_cache.dat
